@@ -1,0 +1,73 @@
+# Docker Compose file - orchestrates all containers together
+services:
+
+  # ---------- Database container ----------
+  app-db:
+    image: postgres:16
+    container_name: app-db
+    environment:                      # necessary environment variables
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppass
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data   # keeps data after container restarts
+    healthcheck:                      # app-service waits until the DB is ready
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  # ---------- Service registry ----------
+  eureka-server:
+    build: ./eureka-server
+    container_name: eureka-server
+    ports:
+      - "8761:8761"                   # Eureka dashboard: http://localhost:8761
+    networks:
+      - app-network
+
+  # ---------- Application microservice ----------
+  app-service:
+    build: ./app-service
+    container_name: app-service
+    depends_on:
+      app-db:
+        condition: service_healthy    # start only after DB is healthy
+      eureka-server:
+        condition: service_started
+    environment:                      # override application.properties for Docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/appdb
+      SPRING_DATASOURCE_USERNAME: appuser
+      SPRING_DATASOURCE_PASSWORD: apppass
+      EUREKA_CLIENT_SERVICE-URL_DEFAULTZONE: http://eureka-server:8761/eureka/
+    ports:
+      - "8081:8081"
+    restart: on-failure
+    networks:
+      - app-network
+
+  # ---------- API Gateway ----------
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    depends_on:
+      - eureka-server
+      - app-service
+    environment:
+      EUREKA_CLIENT_SERVICE-URL_DEFAULTZONE: http://eureka-server:8761/eureka/
+    ports:
+      - "8080:8080"                   # main entry: http://localhost:8080/api/data
+    restart: on-failure
+    networks:
+      - app-network
+
+volumes:
+  db-data:
+
+networks:
+  app-network:
+    driver: bridge
